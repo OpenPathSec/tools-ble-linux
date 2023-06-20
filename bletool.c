@@ -5,6 +5,7 @@
 
 #include <stdlib.h>
 #include <stdio.h>
+#include <stdbool.h>
 #include <unistd.h>
 #include <errno.h>
 #include <signal.h>
@@ -17,31 +18,27 @@
 
 #define DEVICE_NAME   "hci0"
 #define DEFAULT_ADV_HEADER "1F0201060303AAFE1716AAFE80"
+#define MAX_PKT_SIZE 32
 
 static struct hci_filter ofilter;
-
 static volatile int signal_received = 0;
+static int ble_min_interval = 32;
+static int ble_max_interval = 64;
 
 static void sigint_handler(int sig) {
     signal_received = sig;
 }
 
-
-static void hex_dump(char *pref, int width, unsigned char *buf, int len)
+static void hex_dump(char *pref, unsigned char *buf, int len)
 {
-    register int i,n;
+    printf("%s", pref);
+    for (int i = 0; i < len; i++)
+        printf("%2.2X", buf[i]);
+    printf("  ");
 
-    for (i = 0, n = 1; i < len; i++, n++) {
-        if (n == 1)
-            printf("%s", pref);
-        printf("%2.2X ", buf[i]);
-        if (n == width) {
-            printf("\n");
-            n = 0;
-        }
-    }
-    if (i && n!=1)
-        printf("\n");
+    for (int i = 0; i < len; i++)
+        printf("%c", (buf[i] < 0x20 || buf[i] > 0x7e) ? '.' : buf[i]);
+    printf("\n");
 }
 
 static int open_device(char *dev_name)
@@ -91,27 +88,21 @@ void ctrl_command(uint8_t ogf, uint16_t ocf, char *data) {
 
 void configure(uint16_t min_interval, uint16_t max_interval)
 {
-    char data[31];
+    char data[MAX_PKT_SIZE];
     sprintf(data, "%04X%04X0000000000000000000700", htons(min_interval), htons(max_interval));
     ctrl_command(0x08, 0x0006, data);
 }
 
-void advertise_on()
+void advertise_on(bool on)
 {
-    ctrl_command(0x08, 0x000a, "01");
-}
-
-void advertise_off()
-{
-    ctrl_command(0x08, 0x000a, "00");
+    ctrl_command(0x08, 0x000a, on ? "01" : "00");
 }
 
 void set_advertisement_data(char *data)
 {
-    int i;
     char alldata[64];
     sprintf(alldata, "%s%s", DEFAULT_ADV_HEADER, data);
-    for (i=strlen(alldata); i<64; i++) {
+    for (int i = strlen(alldata); i < 64; i++) {
         alldata[i] = '0';
     }
     ctrl_command(0x08, 0x0008, alldata);
@@ -146,7 +137,7 @@ int read_advertise(int dd, uint8_t *data, int datalen)
 
 int print_advertising_devices(int dd) {
     struct sigaction sa;
-    unsigned char dat[31];
+    unsigned char dat[MAX_PKT_SIZE];
 
     memset(&sa, 0, sizeof(sa));
     sa.sa_flags = SA_NOCLDSTOP;
@@ -154,8 +145,8 @@ int print_advertising_devices(int dd) {
     sigaction(SIGINT, &sa, NULL);
 
     while (1) {
-        if (read_advertise(dd, dat, 31) == 0) break;
-        hex_dump("  ", 40, dat, 31);
+        if (read_advertise(dd, dat, MAX_PKT_SIZE) == 0) break;
+        hex_dump("", dat, MAX_PKT_SIZE);
     }
     return 0;
 }
@@ -228,27 +219,32 @@ int lescan_setup() {
 
 static void usage(void)
 {
-    printf("bletool\n");
-    printf("Usage:\n"
-           "\tbletool [options] [hex_string to send]\n");
+    printf("Usage: bletool <-r | -s> [options...]\n");
     printf("Options:\n"
-           "\t--help\tDisplay help\n"
-           "\t-r\tReceive mode\n"
-           "\t-s hex_string\tSend data mode\n");
+           "\t-r, --read               Receive mode\n"
+           "\t-s, --send=HEX_STRING    Send advertisements\n"
+           "\t-h, --help               Display help\n"
+           "\n"
+           "Send (-s) advertisement options:\n"
+           "\t-m, --min_interval=MS    Minimum interval between adverts in ms (default: 32)\n"
+           "\t-M, --max_interval=MS    Maximum interval between adverts in ms (default: 64)\n"
+          );
 }
 
 static struct option main_options[] = {
-    { "help",	0, 0, 'h' },
-    { "read",	1, 0, 'r' },
-    { "send",   1, 0, 's' },
-    { 0, 0, 0, 0 }
+    { "help",         no_argument,       0, 'h' },
+    { "read",	        no_argument,       0, 'r' },
+    { "send",         required_argument, 0, 's' },
+    { "min_interval", required_argument, 0, 'm' },
+    { "max_interval", required_argument, 0, 'M' },
+    { 0,              no_argument,       0,  0  }
 };
 
 int main(int argc, char **argv) {
-    int mode = 1, opt;
+    int option_index = 0, mode = 0, opt;
     char *send_data;
 
-    while ((opt=getopt_long(argc, argv, "r+s:h", main_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "r+s:m:M:h", main_options, &option_index)) != -1) {
         switch (opt) {
         case 'r':
             mode = 1; // receive mode
@@ -259,22 +255,37 @@ int main(int argc, char **argv) {
             send_data = optarg;
             break;
 
+        case 'm':
+            ble_min_interval = atoi(optarg);
+            break;
+
+        case 'M':
+            ble_max_interval = atoi(optarg);
+            break;
+
         case 'h':
         default:
-            usage();
-            exit(0);
+            mode = 0;
         }
     }
+    printf("ble_min_interval: %d\n", ble_min_interval);
+    printf("ble_max_interval: %d\n", ble_max_interval);
 
-    if (mode == 1) {
+    if (mode == 0) {
+        usage();
+        exit(0);
+    } else if (mode == 1) {
         int dd = lescan_setup();
         print_advertising_devices(dd);
         lescan_close(dd);
-    } else {
-        configure(32, 64);
+    } else if (mode == 2) {
+        configure(ble_min_interval, ble_max_interval);
         set_advertisement_data(send_data);
-        advertise_on();
+        advertise_on(true);
         sleep(1);
-        advertise_off();
+        advertise_on(false);
+    } else {
+        printf("ERROR: we shouldn't be here\n");
+        exit(1);
     }
 }
