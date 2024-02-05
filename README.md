@@ -3,13 +3,13 @@ Raw BLE advertisement tool
 This tool is for receiving/sending raw BLE advertisement messages.
 The project is based on the Linux Bluetooth protocol stack, [BlueZ](http://www.bluez.org/).
 
-The <Makefile> is configured for Raspberry Pi 3 and LIB_DIRECTORY needs to be set properly for other environments.
+The <Makefile> is configured for Raspberry Pi 3 and 4, also X86_64 Ubuntu 22.04.
 
 ## Preparation
 Install dependencies.
 
 ```
-sudo apt update && sudo apt-get -y install libdbus-1-dev libdbus-glib-1-dev libglib2.0-dev libical-dev libreadline-dev libudev-dev libusb-dev make bluetooth bluez-utils libbluetooth-dev
+sudo apt update && sudo apt-get -y install libdbus-1-dev libdbus-glib-1-dev libglib2.0-dev libical-dev libreadline-dev libudev-dev libusb-dev make bluetooth libbluetooth-dev
 ```
 
 ## Compilation
